@@ -66,7 +66,7 @@ export default function ChatPage() {
 					}));
 					setChatSessions(convertedSessions);
 				} catch (error) {
-					console.error('Error loading user data:', error);
+					console.error('Error loading user data', error);
 				} finally {
 					setIsLoadingData(false);
 				}
@@ -80,7 +80,6 @@ export default function ChatPage() {
 	const [inputMessage, setInputMessage] = useState('');
 	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
-	const [isRecording, setIsRecording] = useState(false);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [isLoadingData, setIsLoadingData] = useState(true);
 
