@@ -1,0 +1,663 @@
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { useUser, UserButton } from '@clerk/nextjs';
+import { redirect } from 'next/navigation';
+import {
+	Send,
+	X,
+	MessageSquare,
+	Bot,
+	Paperclip,
+	Plus,
+	Trash2,
+	Menu,
+	Mic,
+	MicOff,
+} from 'lucide-react';
+
+interface Message {
+	id: string;
+	type: 'user' | 'assistant';
+	content: string;
+	images?: string[];
+	timestamp: Date;
+}
+
+interface ChatSession {
+	id: string;
+	title: string;
+	lastMessage: string;
+	timestamp: Date;
+	messageCount: number;
+}
+
+interface UploadedImage {
+	id: string;
+	file: File;
+	preview: string;
+	name: string;
+}
+
+export default function ChatPage() {
+	const { user, isLoaded } = useUser();
+
+	useEffect(() => {
+		if (isLoaded && !user) {
+			redirect('/');
+		}
+	}, [isLoaded, user]);
+
+	const [messages, setMessages] = useState<Message[]>([]);
+	const [inputMessage, setInputMessage] = useState('');
+	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
+	const [isLoading, setIsLoading] = useState(false);
+	const [isRecording, setIsRecording] = useState(false);
+	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+	const [chatSessions, setChatSessions] = useState<ChatSession[]>([
+		{
+			id: '1',
+			title: 'Chart Analysis Discussion',
+			lastMessage: 'The sales data shows a 23% increase...',
+			timestamp: new Date(Date.now() - 1000 * 60 * 30),
+			messageCount: 8,
+		},
+		{
+			id: '2',
+			title: 'Product Image Review',
+			lastMessage: 'I can see the product features clearly...',
+			timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2),
+			messageCount: 12,
+		},
+		{
+			id: '3',
+			title: 'Document OCR Analysis',
+			lastMessage: 'The text extraction was successful...',
+			timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24),
+			messageCount: 5,
+		},
+	]);
+	const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+	const scrollToBottom = () => {
+		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+	};
+
+	useEffect(() => {
+		scrollToBottom();
+	}, [messages]);
+
+	useEffect(() => {
+		if (textareaRef.current) {
+			textareaRef.current.style.height = 'auto';
+			textareaRef.current.style.height = `${Math.min(
+				textareaRef.current.scrollHeight,
+				120
+			)}px`;
+		}
+	}, [inputMessage]);
+
+	const createNewChat = () => {
+		setMessages([]);
+		setCurrentChatId(null);
+		setUploadedImages([]);
+		setInputMessage('');
+		setIsSidebarOpen(false);
+	};
+
+	const deleteChat = (chatId: string) => {
+		setChatSessions((prev) => prev.filter((chat) => chat.id !== chatId));
+		if (currentChatId === chatId) {
+			createNewChat();
+		}
+	};
+
+	const loadChat = (chatId: string) => {
+		setCurrentChatId(chatId);
+		setMessages([]);
+		setIsSidebarOpen(false);
+	};
+
+	const formatTime = (date: Date) => {
+		const now = new Date();
+		const diff = now.getTime() - date.getTime();
+		const minutes = Math.floor(diff / (1000 * 60));
+		const hours = Math.floor(diff / (1000 * 60 * 60));
+		const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+		if (minutes < 60) return `${minutes}m ago`;
+		if (hours < 24) return `${hours}h ago`;
+		return `${days}d ago`;
+	};
+
+	const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+		const files = Array.from(event.target.files || []);
+
+		files.forEach((file) => {
+			if (!file.type.startsWith('image/')) {
+				alert('Please upload only image files');
+				return;
+			}
+
+			const preview = URL.createObjectURL(file);
+
+			const uploadedImage: UploadedImage = {
+				id: Date.now().toString() + Math.random(),
+				file,
+				preview,
+				name: file.name,
+			};
+
+			setUploadedImages((prev) => [...prev, uploadedImage]);
+		});
+
+		if (fileInputRef.current) {
+			fileInputRef.current.value = '';
+		}
+	};
+
+	const removeImage = (imageId: string) => {
+		setUploadedImages((prev) => {
+			const imageToRemove = prev.find((img) => img.id === imageId);
+			if (imageToRemove) {
+				URL.revokeObjectURL(imageToRemove.preview);
+			}
+			return prev.filter((img) => img.id !== imageId);
+		});
+	};
+
+	const toggleVoiceRecording = () => {
+		setIsRecording(!isRecording);
+		console.log(
+			isRecording ? 'Stopping recording...' : 'Starting recording...'
+		);
+	};
+
+	const handleSubmit = async (e: React.FormEvent) => {
+		e.preventDefault();
+
+		if (!inputMessage.trim() && uploadedImages.length === 0) return;
+
+		setIsLoading(true);
+
+		const userMessage: Message = {
+			id: Date.now().toString(),
+			type: 'user',
+			content: inputMessage || 'Analyze these images',
+			images: uploadedImages.map((img) => img.preview),
+			timestamp: new Date(),
+		};
+
+		setMessages((prev) => [...prev, userMessage]);
+
+		const imagesToProcess = [...uploadedImages];
+		setInputMessage('');
+		setUploadedImages([]);
+
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 2000));
+
+			const aiMessage: Message = {
+				id: (Date.now() + 1).toString(),
+				type: 'assistant',
+				content: `I can see ${
+					imagesToProcess.length
+				} image(s) in your message. ${
+					inputMessage
+						? `You asked: "${inputMessage}"`
+						: 'Let me analyze these images for you.'
+				}\n\nThis is a placeholder response. In the actual implementation, I would analyze your images using AI and provide detailed insights about what I see.`,
+				timestamp: new Date(),
+			};
+
+			setMessages((prev) => [...prev, aiMessage]);
+		} catch (error) {
+			console.error('Error processing message:', error);
+
+			const errorMessage: Message = {
+				id: (Date.now() + 1).toString(),
+				type: 'assistant',
+				content:
+					'Sorry, I encountered an error while analyzing your images. Please try again.',
+				timestamp: new Date(),
+			};
+
+			setMessages((prev) => [...prev, errorMessage]);
+		} finally {
+			setIsLoading(false);
+		}
+	};
+
+	const handleKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			handleSubmit(e);
+		}
+	};
+
+	if (!isLoaded) {
+		return (
+			<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+				<div className="text-center">
+					<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+					<p className="text-gray-600 dark:text-gray-300">
+						Loading...
+					</p>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+			{isSidebarOpen && (
+				<div
+					className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+					onClick={() => setIsSidebarOpen(false)}
+				/>
+			)}
+
+			<div
+				className={`
+					fixed lg:relative inset-y-0 left-0 z-50
+					w-80 bg-white dark:bg-gray-800
+					border-r border-gray-200 dark:border-gray-700
+					transform transition-transform duration-300 ease-in-out
+					${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+				`}
+			>
+				<div className="flex flex-col h-full">
+					<div className="p-6 border-b border-gray-200 dark:border-gray-700">
+						<div className="flex items-center justify-between mb-6">
+							<h2 className="text-xl font-bold text-gray-900 dark:text-white">
+								ALASCHAT
+							</h2>
+							<button
+								onClick={createNewChat}
+								className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors cursor-pointer"
+							>
+								<Plus className="h-4 w-4" />
+								New Chat
+							</button>
+						</div>
+
+						<div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+							<div className="h-10 w-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold">
+								{user?.firstName?.charAt(0) ||
+									user?.emailAddresses[0]?.emailAddress.charAt(
+										0
+									) ||
+									'U'}
+							</div>
+
+							<div className="flex-1 min-w-0">
+								<p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+									{user?.firstName ||
+										user?.emailAddresses[0]?.emailAddress}
+								</p>
+								<p className="text-xs text-gray-500 dark:text-gray-400">
+									{chatSessions.length} conversations
+								</p>
+							</div>
+
+							<UserButton afterSignOutUrl="/" />
+						</div>
+					</div>
+
+					<div className="flex-1 overflow-y-auto p-4">
+						<div className="space-y-2">
+							{chatSessions.map((chat) => (
+								<div
+									key={chat.id}
+									className={`
+										group flex items-start gap-3 p-4 rounded-lg cursor-pointer
+										transition-all duration-200 border
+										${
+											currentChatId === chat.id
+												? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+												: 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+										}
+									`}
+									onClick={() => loadChat(chat.id)}
+								>
+									<div className="flex-shrink-0 w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
+										<MessageSquare className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+									</div>
+
+									<div className="flex-1 min-w-0">
+										<h3 className="font-medium text-sm text-gray-900 dark:text-white truncate">
+											{chat.title}
+										</h3>
+										<p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">
+											{chat.lastMessage}
+										</p>
+										<div className="flex items-center justify-between mt-2">
+											<span className="text-xs text-gray-400 dark:text-gray-500">
+												{formatTime(chat.timestamp)}
+											</span>
+											<span className="text-xs text-gray-400 dark:text-gray-500">
+												{chat.messageCount} messages
+											</span>
+										</div>
+									</div>
+
+									<button
+										onClick={(e) => {
+											e.stopPropagation();
+											deleteChat(chat.id);
+										}}
+										className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded cursor-pointer"
+									>
+										<Trash2 className="h-4 w-4 text-red-500" />
+									</button>
+								</div>
+							))}
+						</div>
+
+						{chatSessions.length === 0 && (
+							<div className="text-center py-12">
+								<MessageSquare className="h-16 w-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+								<p className="text-gray-500 dark:text-gray-400 text-sm font-medium">
+									No conversations yet
+								</p>
+								<p className="text-gray-400 dark:text-gray-500 text-xs mt-1">
+									Start by uploading an image!
+								</p>
+							</div>
+						)}
+					</div>
+				</div>
+			</div>
+
+			<div className="flex-1 flex flex-col min-w-0">
+				<header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-4">
+							<button
+								onClick={() => setIsSidebarOpen(true)}
+								className="lg:hidden p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors cursor-pointer"
+							>
+								<Menu className="h-5 w-5" />
+							</button>
+
+							<div className="flex items-center gap-3">
+								<div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+									<Bot className="h-5 w-5 text-white" />
+								</div>
+								<div>
+									<h1 className="font-semibold text-gray-900 dark:text-white">
+										{currentChatId
+											? chatSessions.find(
+													(c) =>
+														c.id === currentChatId
+											  )?.title || 'Chat'
+											: 'New Conversation'}
+									</h1>
+									<p className="text-sm text-gray-500 dark:text-gray-400">
+										AI Image Analysis Assistant
+									</p>
+								</div>
+							</div>
+						</div>
+					</div>
+				</header>
+
+				<div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900 px-6 py-6">
+					<div className="max-w-4xl mx-auto space-y-6">
+						{messages.length === 0 && (
+							<div className="text-center py-16">
+								<div className="w-20 h-20 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-6">
+									<Bot className="h-10 w-10 text-blue-600 dark:text-blue-400" />
+								</div>
+								<h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+									Welcome to ALASCHAT!
+								</h2>
+								<p className="text-gray-600 dark:text-gray-400 mb-8 text-lg">
+									Upload images and ask me anything about
+									them. I'll help you analyze and understand
+									your visual content.
+								</p>
+								<div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 max-w-md mx-auto">
+									<p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+										Try asking:
+									</p>
+									<ul className="text-sm text-gray-600 dark:text-gray-400 space-y-2 text-left">
+										<li>
+											• "What do you see in this image?"
+										</li>
+										<li>
+											• "Analyze the data in this chart"
+										</li>
+										<li>
+											• "What trends can you identify?"
+										</li>
+									</ul>
+								</div>
+							</div>
+						)}
+
+						{messages.map((message) => (
+							<div
+								key={message.id}
+								className={`flex gap-4 ${
+									message.type === 'user'
+										? 'justify-end'
+										: 'justify-start'
+								}`}
+							>
+								{message.type === 'assistant' && (
+									<div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+										<Bot className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+									</div>
+								)}
+
+								<div
+									className={`max-w-xs sm:max-w-md lg:max-w-lg xl:max-w-xl ${
+										message.type === 'user' ? 'order-1' : ''
+									}`}
+								>
+									<div
+										className={`
+											rounded-2xl px-6 py-4 border
+											${
+												message.type === 'user'
+													? 'bg-blue-600 text-white border-blue-600'
+													: 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-gray-200 dark:border-gray-700'
+											}
+										`}
+									>
+										{message.images &&
+											message.images.length > 0 && (
+												<div className="mb-4 space-y-3">
+													{message.images.map(
+														(imageUrl, index) => (
+															<img
+																key={index}
+																src={imageUrl}
+																alt={`Uploaded image ${
+																	index + 1
+																}`}
+																className="max-w-full h-auto rounded-lg border border-gray-200 dark:border-gray-600"
+															/>
+														)
+													)}
+												</div>
+											)}
+
+										<p className="whitespace-pre-wrap text-sm leading-relaxed">
+											{message.content}
+										</p>
+									</div>
+
+									<p
+										className={`text-xs text-gray-500 dark:text-gray-400 mt-2 ${
+											message.type === 'user'
+												? 'text-right'
+												: 'text-left'
+										}`}
+									>
+										{message.timestamp.toLocaleTimeString(
+											[],
+											{
+												hour: '2-digit',
+												minute: '2-digit',
+											}
+										)}
+									</p>
+								</div>
+
+								{message.type === 'user' && (
+									<div className="w-10 h-10 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center flex-shrink-0 mt-1 order-2">
+										<span className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+											{user?.firstName?.charAt(0) || 'U'}
+										</span>
+									</div>
+								)}
+							</div>
+						))}
+
+						{isLoading && (
+							<div className="flex justify-start gap-4">
+								<div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+									<Bot className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+								</div>
+								<div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl px-6 py-4">
+									<div className="flex items-center gap-3">
+										<div className="flex gap-1">
+											<div className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"></div>
+											<div
+												className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"
+												style={{
+													animationDelay: '0.1s',
+												}}
+											></div>
+											<div
+												className="w-2 h-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"
+												style={{
+													animationDelay: '0.2s',
+												}}
+											></div>
+										</div>
+										<span className="text-sm text-gray-500 dark:text-gray-400">
+											AI is analyzing...
+										</span>
+									</div>
+								</div>
+							</div>
+						)}
+
+						<div ref={messagesEndRef} />
+					</div>
+				</div>
+
+				<div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-6">
+					<div className="max-w-4xl mx-auto">
+						{uploadedImages.length > 0 && (
+							<div className="mb-4">
+								<div className="flex flex-wrap gap-3">
+									{uploadedImages.map((image) => (
+										<div
+											key={image.id}
+											className="relative"
+										>
+											<img
+												src={image.preview}
+												alt={image.name}
+												className="w-20 h-20 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600"
+											/>
+											<button
+												onClick={() =>
+													removeImage(image.id)
+												}
+												className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors cursor-pointer"
+											>
+												<X className="w-3 h-3" />
+											</button>
+										</div>
+									))}
+								</div>
+							</div>
+						)}
+
+						<form
+							onSubmit={handleSubmit}
+							className="flex items-end gap-3"
+						>
+							<input
+								type="file"
+								ref={fileInputRef}
+								onChange={handleFileUpload}
+								accept="image/*"
+								multiple
+								className="hidden"
+							/>
+							<button
+								type="button"
+								onClick={() => fileInputRef.current?.click()}
+								className="flex-shrink-0 h-12 px-4 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl transition-colors cursor-pointer"
+								title="Upload images"
+							>
+								<Paperclip className="w-5 h-5" />
+							</button>
+
+							<button
+								type="button"
+								onClick={toggleVoiceRecording}
+								className={`
+									flex-shrink-0 h-12 px-4 border border-gray-300 dark:border-gray-600 rounded-xl transition-colors cursor-pointer
+									${
+										isRecording
+											? 'bg-red-500 text-white hover:bg-red-600'
+											: 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700'
+									}
+								`}
+								title={
+									isRecording
+										? 'Stop recording'
+										: 'Start voice recording'
+								}
+							>
+								{isRecording ? (
+									<MicOff className="w-5 h-5" />
+								) : (
+									<Mic className="w-5 h-5" />
+								)}
+							</button>
+
+							<div className="flex-1">
+								<textarea
+									ref={textareaRef}
+									value={inputMessage}
+									onChange={(e) =>
+										setInputMessage(e.target.value)
+									}
+									onKeyDown={handleKeyDown}
+									placeholder="Ask me anything about your images..."
+									rows={1}
+									className="w-full h-12 px-4 py-3 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+									disabled={isLoading}
+								/>
+							</div>
+
+							<button
+								type="submit"
+								disabled={
+									(!inputMessage.trim() &&
+										uploadedImages.length === 0) ||
+									isLoading
+								}
+								className="flex-shrink-0 h-12 px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+							>
+								<Send className="w-5 h-5" />
+							</button>
+						</form>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
