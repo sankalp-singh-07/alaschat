@@ -15,6 +15,15 @@ import {
 	Mic,
 	MicOff,
 } from 'lucide-react';
+import {
+	saveChatSession,
+	loadChatSessions,
+	saveMessage,
+	loadMessages,
+	updateChatSession,
+	deleteChatSession as deleteFirebaseChatSession,
+} from '../../lib/firebaseUtils';
+import { Timestamp } from 'firebase/firestore';
 
 interface Message {
 	id: string;
@@ -48,12 +57,35 @@ export default function ChatPage() {
 		}
 	}, [isLoaded, user]);
 
+	useEffect(() => {
+		const loadUserData = async () => {
+			if (isLoaded && user) {
+				setIsLoadingData(true);
+				try {
+					const sessions = await loadChatSessions(user.id);
+					const convertedSessions = sessions.map((session) => ({
+						...session,
+						timestamp: session.timestamp.toDate(),
+					}));
+					setChatSessions(convertedSessions);
+				} catch (error) {
+					console.error('Error loading user data:', error);
+				} finally {
+					setIsLoadingData(false);
+				}
+			}
+		};
+
+		loadUserData();
+	}, [isLoaded, user]);
+
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [inputMessage, setInputMessage] = useState('');
 	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [isRecording, setIsRecording] = useState(false);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+	const [isLoadingData, setIsLoadingData] = useState(true);
 
 	const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
 	const [currentChatId, setCurrentChatId] = useState<string | null>(null);
@@ -87,17 +119,39 @@ export default function ChatPage() {
 		setIsSidebarOpen(false);
 	};
 
-	const deleteChat = (chatId: string) => {
-		setChatSessions((prev) => prev.filter((chat) => chat.id !== chatId));
-		if (currentChatId === chatId) {
-			createNewChat();
+	const deleteChat = async (chatId: string) => {
+		if (!user) return;
+
+		try {
+			await deleteFirebaseChatSession(chatId, user.id);
+			setChatSessions((prev) =>
+				prev.filter((chat) => chat.id !== chatId)
+			);
+			if (currentChatId === chatId) {
+				createNewChat();
+			}
+		} catch (error) {
+			console.error('Error deleting chat:', error);
 		}
 	};
 
-	const loadChat = (chatId: string) => {
+	const loadChat = async (chatId: string) => {
+		if (!user) return;
+
 		setCurrentChatId(chatId);
-		setMessages([]);
 		setIsSidebarOpen(false);
+
+		try {
+			const chatMessages = await loadMessages(chatId, user.id);
+			const convertedMessages = chatMessages.map((msg) => ({
+				...msg,
+				timestamp: msg.timestamp.toDate(),
+			}));
+			setMessages(convertedMessages);
+		} catch (error) {
+			console.error('Error loading chat messages:', error);
+			setMessages([]);
+		}
 	};
 
 	const formatTime = (date: Date) => {
@@ -168,6 +222,7 @@ export default function ChatPage() {
 		e.preventDefault();
 
 		if (!inputMessage.trim() && uploadedImages.length === 0) return;
+		if (!user) return;
 
 		setIsLoading(true);
 
@@ -186,17 +241,35 @@ export default function ChatPage() {
 		setMessages((prev) => [...prev, userMessage]);
 
 		const imagesToProcess = [...uploadedImages];
+		const currentMessage = inputMessage;
 		setInputMessage('');
 		setUploadedImages([]);
 
 		try {
+			let activeChatId = currentChatId;
+
+			if (!activeChatId) {
+				activeChatId = Date.now().toString();
+				setCurrentChatId(activeChatId);
+			}
+
+			await saveMessage({
+				id: userMessage.id,
+				type: userMessage.type,
+				content: userMessage.content,
+				images: imageDataUrls,
+				timestamp: userMessage.timestamp,
+				chatId: activeChatId,
+				userId: user.id,
+			});
+
 			const response = await fetch('/api/analyze-images', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
 				},
 				body: JSON.stringify({
-					message: inputMessage,
+					message: currentMessage,
 					images: imageDataUrls,
 				}),
 			});
@@ -217,12 +290,21 @@ export default function ChatPage() {
 
 			setMessages((prev) => [...prev, aiMessage]);
 
+			await saveMessage({
+				id: aiMessage.id,
+				type: aiMessage.type,
+				content: aiMessage.content,
+				timestamp: aiMessage.timestamp,
+				chatId: activeChatId,
+				userId: user.id,
+			});
+
 			if (!currentChatId) {
 				const newSession: ChatSession = {
-					id: Date.now().toString(),
+					id: activeChatId,
 					title:
-						inputMessage.slice(0, 50) +
-							(inputMessage.length > 50 ? '...' : '') ||
+						currentMessage.slice(0, 50) +
+							(currentMessage.length > 50 ? '...' : '') ||
 						'Image Analysis',
 					lastMessage:
 						analysis.slice(0, 100) +
@@ -230,20 +312,23 @@ export default function ChatPage() {
 					timestamp: new Date(),
 					messageCount: 2,
 				};
+
+				await saveChatSession(newSession, user.id);
 				setChatSessions((prev) => [newSession, ...prev]);
-				setCurrentChatId(newSession.id);
 			} else {
+				const updatedSession = {
+					lastMessage:
+						analysis.slice(0, 100) +
+						(analysis.length > 100 ? '...' : ''),
+					timestamp: new Date(),
+					messageCount: messages.length + 2,
+				};
+
+				await updateChatSession(activeChatId, updatedSession, user.id);
 				setChatSessions((prev) =>
 					prev.map((chat) =>
-						chat.id === currentChatId
-							? {
-									...chat,
-									lastMessage:
-										analysis.slice(0, 100) +
-										(analysis.length > 100 ? '...' : ''),
-									timestamp: new Date(),
-									messageCount: chat.messageCount + 2,
-							  }
+						chat.id === activeChatId
+							? { ...chat, ...updatedSession }
 							: chat
 					)
 				);
@@ -288,13 +373,13 @@ export default function ChatPage() {
 		}
 	};
 
-	if (!isLoaded) {
+	if (!isLoaded || isLoadingData) {
 		return (
 			<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
 				<div className="text-center">
 					<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
 					<p className="text-gray-600 dark:text-gray-300">
-						Loading...
+						{!isLoaded ? 'Loading...' : 'Loading your chats...'}
 					</p>
 				</div>
 			</div>
