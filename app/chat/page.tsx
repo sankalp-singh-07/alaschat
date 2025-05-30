@@ -55,29 +55,7 @@ export default function ChatPage() {
 	const [isRecording, setIsRecording] = useState(false);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-	const [chatSessions, setChatSessions] = useState<ChatSession[]>([
-		{
-			id: '1',
-			title: 'Chart Analysis Discussion',
-			lastMessage: 'The sales data shows a 23% increase...',
-			timestamp: new Date(Date.now() - 1000 * 60 * 30),
-			messageCount: 8,
-		},
-		{
-			id: '2',
-			title: 'Product Image Review',
-			lastMessage: 'I can see the product features clearly...',
-			timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2),
-			messageCount: 12,
-		},
-		{
-			id: '3',
-			title: 'Document OCR Analysis',
-			lastMessage: 'The text extraction was successful...',
-			timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24),
-			messageCount: 5,
-		},
-	]);
+	const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
 	const [currentChatId, setCurrentChatId] = useState<string | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -134,6 +112,15 @@ export default function ChatPage() {
 		return `${days}d ago`;
 	};
 
+	const fileToBase64 = (file: File): Promise<string> => {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.readAsDataURL(file);
+			reader.onload = () => resolve(reader.result as string);
+			reader.onerror = (error) => reject(error);
+		});
+	};
+
 	const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(event.target.files || []);
 
@@ -184,6 +171,10 @@ export default function ChatPage() {
 
 		setIsLoading(true);
 
+		const imageDataUrls = await Promise.all(
+			uploadedImages.map((img) => fileToBase64(img.file))
+		);
+
 		const userMessage: Message = {
 			id: Date.now().toString(),
 			type: 'user',
@@ -199,35 +190,93 @@ export default function ChatPage() {
 		setUploadedImages([]);
 
 		try {
-			await new Promise((resolve) => setTimeout(resolve, 2000));
+			const response = await fetch('/api/analyze-images', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					message: inputMessage,
+					images: imageDataUrls,
+				}),
+			});
+
+			if (!response.ok) {
+				const errorData = await response.json();
+				throw new Error(errorData.error || 'Failed to analyze images');
+			}
+
+			const { analysis } = await response.json();
 
 			const aiMessage: Message = {
 				id: (Date.now() + 1).toString(),
 				type: 'assistant',
-				content: `I can see ${
-					imagesToProcess.length
-				} image(s) in your message. ${
-					inputMessage
-						? `You asked: "${inputMessage}"`
-						: 'Let me analyze these images for you.'
-				}\n\nThis is a placeholder response. In the actual implementation, I would analyze your images using AI and provide detailed insights about what I see.`,
+				content: analysis,
 				timestamp: new Date(),
 			};
 
 			setMessages((prev) => [...prev, aiMessage]);
-		} catch (error) {
+
+			if (!currentChatId) {
+				const newSession: ChatSession = {
+					id: Date.now().toString(),
+					title:
+						inputMessage.slice(0, 50) +
+							(inputMessage.length > 50 ? '...' : '') ||
+						'Image Analysis',
+					lastMessage:
+						analysis.slice(0, 100) +
+						(analysis.length > 100 ? '...' : ''),
+					timestamp: new Date(),
+					messageCount: 2,
+				};
+				setChatSessions((prev) => [newSession, ...prev]);
+				setCurrentChatId(newSession.id);
+			} else {
+				setChatSessions((prev) =>
+					prev.map((chat) =>
+						chat.id === currentChatId
+							? {
+									...chat,
+									lastMessage:
+										analysis.slice(0, 100) +
+										(analysis.length > 100 ? '...' : ''),
+									timestamp: new Date(),
+									messageCount: chat.messageCount + 2,
+							  }
+							: chat
+					)
+				);
+			}
+		} catch (error: any) {
 			console.error('Error processing message:', error);
 
-			const errorMessage: Message = {
+			let errorMessage =
+				'Sorry, I encountered an error while analyzing your images. Please try again.';
+
+			if (error.message.includes('API key')) {
+				errorMessage =
+					'AI service configuration error. Please contact support.';
+			} else if (error.message.includes('quota')) {
+				errorMessage =
+					'AI service quota exceeded. Please try again later.';
+			} else if (error.message.includes('Invalid')) {
+				errorMessage =
+					'Invalid request. Please check your images and try again.';
+			}
+
+			const errorResponse: Message = {
 				id: (Date.now() + 1).toString(),
 				type: 'assistant',
-				content:
-					'Sorry, I encountered an error while analyzing your images. Please try again.',
+				content: errorMessage,
 				timestamp: new Date(),
 			};
 
-			setMessages((prev) => [...prev, errorMessage]);
+			setMessages((prev) => [...prev, errorResponse]);
 		} finally {
+			imagesToProcess.forEach((img) => {
+				URL.revokeObjectURL(img.preview);
+			});
 			setIsLoading(false);
 		}
 	};
