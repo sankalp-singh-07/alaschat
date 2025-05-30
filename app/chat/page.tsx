@@ -12,8 +12,6 @@ import {
 	Plus,
 	Trash2,
 	Menu,
-	Mic,
-	MicOff,
 } from 'lucide-react';
 import {
 	saveChatSession,
@@ -23,7 +21,6 @@ import {
 	updateChatSession,
 	deleteChatSession as deleteFirebaseChatSession,
 } from '../../lib/firebaseUtils';
-import { Timestamp } from 'firebase/firestore';
 
 interface Message {
 	id: string;
@@ -209,13 +206,6 @@ export default function ChatPage() {
 			}
 			return prev.filter((img) => img.id !== imageId);
 		});
-	};
-
-	const toggleVoiceRecording = () => {
-		setIsRecording(!isRecording);
-		console.log(
-			isRecording ? 'Stopping recording...' : 'Starting recording...'
-		);
 	};
 
 	const handleSubmit = async (e: React.FormEvent) => {
@@ -717,6 +707,16 @@ export default function ChatPage() {
 							</div>
 						)}
 
+						{uploadedImages.length === 0 && (
+							<div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+								<p className="text-sm text-yellow-800 dark:text-yellow-200 flex items-center gap-2">
+									<Paperclip className="w-4 h-4" />
+									Upload an image first to enable text and
+									voice input
+								</p>
+							</div>
+						)}
+
 						<form
 							onSubmit={handleSubmit}
 							className="flex items-end gap-3"
@@ -738,30 +738,6 @@ export default function ChatPage() {
 								<Paperclip className="w-5 h-5" />
 							</button>
 
-							<button
-								type="button"
-								onClick={toggleVoiceRecording}
-								className={`
-									flex-shrink-0 h-12 px-4 border border-gray-300 dark:border-gray-600 rounded-xl transition-colors cursor-pointer
-									${
-										isRecording
-											? 'bg-red-500 text-white hover:bg-red-600'
-											: 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700'
-									}
-								`}
-								title={
-									isRecording
-										? 'Stop recording'
-										: 'Start voice recording'
-								}
-							>
-								{isRecording ? (
-									<MicOff className="w-5 h-5" />
-								) : (
-									<Mic className="w-5 h-5" />
-								)}
-							</button>
-
 							<div className="flex-1">
 								<textarea
 									ref={textareaRef}
@@ -770,16 +746,27 @@ export default function ChatPage() {
 										setInputMessage(e.target.value)
 									}
 									onKeyDown={handleKeyDown}
-									placeholder="Ask me anything about your images..."
+									placeholder={
+										uploadedImages.length === 0
+											? 'Upload an image first to start chatting...'
+											: 'Ask me anything about your images...'
+									}
 									rows={1}
-									className="w-full h-12 px-4 py-3 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-									disabled={isLoading}
+									className={`w-full h-12 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 ${
+										uploadedImages.length === 0
+											? 'bg-gray-100 dark:bg-gray-600 cursor-not-allowed'
+											: 'bg-white dark:bg-gray-700'
+									}`}
+									disabled={
+										isLoading || uploadedImages.length === 0
+									}
 								/>
 							</div>
 
 							<button
 								type="submit"
 								disabled={
+									uploadedImages.length === 0 ||
 									(!inputMessage.trim() &&
 										uploadedImages.length === 0) ||
 									isLoading
