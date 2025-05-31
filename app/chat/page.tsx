@@ -21,6 +21,7 @@ import {
 	updateChatSession,
 	deleteChatSession as deleteFirebaseChatSession,
 } from '../../lib/firebaseUtils';
+import VoiceInput from '../../components/voiceInput';
 
 interface Message {
 	id: string;
@@ -89,6 +90,15 @@ export default function ChatPage() {
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+	// Initialize voice input
+	const voiceInput = VoiceInput({
+		onTranscript: (text: string) => {
+			setInputMessage((prev) => prev + (prev ? ' ' : '') + text);
+		},
+		disabled: uploadedImages.length === 0 || isLoading,
+		size: 'md',
+	});
+
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 	};
@@ -113,6 +123,10 @@ export default function ChatPage() {
 		setUploadedImages([]);
 		setInputMessage('');
 		setIsSidebarOpen(false);
+		// Force stop voice recording if active
+		if (voiceInput.isRecording) {
+			voiceInput.forceStop();
+		}
 	};
 
 	const deleteChat = async (chatId: string) => {
@@ -136,6 +150,11 @@ export default function ChatPage() {
 
 		setCurrentChatId(chatId);
 		setIsSidebarOpen(false);
+
+		// Force stop voice recording when switching chats
+		if (voiceInput.isRecording) {
+			voiceInput.forceStop();
+		}
 
 		try {
 			const chatMessages = await loadMessages(chatId, user.id);
@@ -212,6 +231,11 @@ export default function ChatPage() {
 
 		if (!inputMessage.trim() && uploadedImages.length === 0) return;
 		if (!user) return;
+
+		// Force stop voice recording when submitting
+		if (voiceInput.isRecording) {
+			voiceInput.forceStop();
+		}
 
 		setIsLoading(true);
 
@@ -358,6 +382,10 @@ export default function ChatPage() {
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
+			// Force stop voice recording before submitting via Enter key
+			if (voiceInput.isRecording) {
+				voiceInput.forceStop();
+			}
 			handleSubmit(e);
 		}
 	};
@@ -521,7 +549,8 @@ export default function ChatPage() {
 											: 'New Conversation'}
 									</h1>
 									<p className="text-sm text-gray-500 dark:text-gray-400">
-										AI Image Analysis Assistant
+										AI Image Analysis Assistant with Voice
+										Input
 									</p>
 								</div>
 							</div>
@@ -540,9 +569,9 @@ export default function ChatPage() {
 									Welcome to ALASCHAT!
 								</h2>
 								<p className="text-gray-600 dark:text-gray-400 mb-8 text-lg">
-									Upload images and ask me anything about
-									them. I'll help you analyze and understand
-									your visual content.
+									Upload images and ask me anything about them
+									using text or voice input. I'll help you
+									analyze and understand your visual content.
 								</p>
 								<div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 max-w-md mx-auto">
 									<p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -550,13 +579,13 @@ export default function ChatPage() {
 									</p>
 									<ul className="text-sm text-gray-600 dark:text-gray-400 space-y-2 text-left">
 										<li>
-											• "What do you see in this image?"
+											🗣️ "What do you see in this image?"
 										</li>
 										<li>
-											• "Analyze the data in this chart"
+											📊 "Analyze the data in this chart"
 										</li>
 										<li>
-											• "What trends can you identify?"
+											📈 "What trends can you identify?"
 										</li>
 									</ul>
 								</div>
@@ -706,6 +735,7 @@ export default function ChatPage() {
 							</div>
 						)}
 
+						{/* Show status based on uploaded images */}
 						{uploadedImages.length === 0 && (
 							<div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
 								<p className="text-sm text-yellow-800 dark:text-yellow-200 flex items-center gap-2">
@@ -713,6 +743,13 @@ export default function ChatPage() {
 									Upload an image first to enable text and
 									voice input
 								</p>
+							</div>
+						)}
+
+						{/* Voice status component - only show when images are uploaded */}
+						{uploadedImages.length > 0 && (
+							<div className="mb-4">
+								<voiceInput.VoiceStatus />
 							</div>
 						)}
 
@@ -737,10 +774,18 @@ export default function ChatPage() {
 								<Paperclip className="w-5 h-5" />
 							</button>
 
+							{/* Voice input button */}
+							<voiceInput.VoiceButton />
+
 							<div className="flex-1">
 								<textarea
 									ref={textareaRef}
-									value={inputMessage}
+									value={
+										inputMessage +
+										(voiceInput.interimText
+											? ' ' + voiceInput.interimText
+											: '')
+									}
 									onChange={(e) =>
 										setInputMessage(e.target.value)
 									}
@@ -748,12 +793,16 @@ export default function ChatPage() {
 									placeholder={
 										uploadedImages.length === 0
 											? 'Upload an image first to start chatting...'
-											: 'Ask me anything about your images...'
+											: voiceInput.isRecording
+											? '🎤 Listening... Speak now or continue typing'
+											: 'Type your message or click the mic to speak...'
 									}
 									rows={1}
 									className={`w-full h-12 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 ${
 										uploadedImages.length === 0
 											? 'bg-gray-100 dark:bg-gray-600 cursor-not-allowed'
+											: voiceInput.isRecording
+											? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-600'
 											: 'bg-white dark:bg-gray-700'
 									}`}
 									disabled={
@@ -775,6 +824,21 @@ export default function ChatPage() {
 								<Send className="w-5 h-5" />
 							</button>
 						</form>
+
+						{/* Browser compatibility notice */}
+						<div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
+							{voiceInput.speechSupported ? (
+								<span>
+									🎤 Voice input ready • Works in Chrome,
+									Edge, Safari • Firefox not supported
+								</span>
+							) : (
+								<span>
+									🚫 Voice features require Chrome, Edge, or
+									Safari • Firefox doesn't support voice input
+								</span>
+							)}
+						</div>
 					</div>
 				</div>
 			</div>
