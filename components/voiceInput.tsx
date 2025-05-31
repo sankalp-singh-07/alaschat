@@ -37,15 +37,29 @@ export default function VoiceInput({
 	const [browserType, setBrowserType] = useState<
 		'chrome' | 'edge' | 'firefox' | 'safari' | 'other'
 	>('other');
+	const [isMobile, setIsMobile] = useState(false);
 
 	const recognitionRef = useRef<any>(null);
 	const isRecognitionActive = useRef(false);
 	const stopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+	const lastTranscriptRef = useRef<string>('');
+	const transcriptTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+	const mobileTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
 	const detectBrowser = useCallback(() => {
 		if (typeof window === 'undefined') return 'other';
 
 		const userAgent = window.navigator.userAgent.toLowerCase();
+
+		// Detect if mobile device
+		const isMobileDevice =
+			/android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(
+				userAgent
+			) ||
+			(navigator.maxTouchPoints &&
+				navigator.maxTouchPoints > 2 &&
+				/macintosh/.test(userAgent));
+		setIsMobile(Boolean(isMobileDevice));
 
 		if (userAgent.includes('firefox')) {
 			return 'firefox';
@@ -131,10 +145,25 @@ export default function VoiceInput({
 		try {
 			const recognition = new SpeechRecognition();
 
-			recognition.continuous = true;
-			recognition.interimResults = true;
+			// Mobile-optimized settings
+			if (isMobile) {
+				recognition.continuous = false; // Better for mobile - restart manually
+				recognition.interimResults = true;
+				recognition.maxAlternatives = 3; // More alternatives for better accuracy
+				// Add mobile-specific settings
+				if ('webkitSpeechRecognition' in window) {
+					recognition.lang = 'en-US';
+					// Mobile Chrome specific optimizations
+					(recognition as any).serviceURI =
+						'wss://www.google.com/speech-api/full-duplex/v1';
+				}
+			} else {
+				recognition.continuous = true;
+				recognition.interimResults = true;
+				recognition.maxAlternatives = 1;
+			}
+
 			recognition.lang = 'en-US';
-			recognition.maxAlternatives = 1;
 
 			recognition.onstart = () => {
 				console.log('🎤 Speech recognition started');
@@ -157,11 +186,59 @@ export default function VoiceInput({
 					}
 				}
 
+				// Show interim results
 				setInterimText(interimTranscript);
 
 				if (finalTranscript) {
-					onTranscript(finalTranscript.trim());
-					setInterimText('');
+					const cleanTranscript = finalTranscript.trim();
+
+					// Prevent duplicate transcriptions
+					if (
+						cleanTranscript &&
+						cleanTranscript !== lastTranscriptRef.current
+					) {
+						// Clear any pending duplicate timeout
+						if (transcriptTimeoutRef.current) {
+							clearTimeout(transcriptTimeoutRef.current);
+						}
+
+						// Debounce to prevent rapid duplicates
+						transcriptTimeoutRef.current = setTimeout(
+							() => {
+								console.log(
+									'Adding transcript:',
+									cleanTranscript
+								);
+								lastTranscriptRef.current = cleanTranscript;
+								onTranscript(cleanTranscript);
+								setInterimText('');
+
+								// For mobile, restart recognition to continue listening
+								if (
+									isMobile &&
+									isRecognitionActive.current &&
+									recognitionRef.current
+								) {
+									try {
+										setTimeout(() => {
+											if (
+												isRecognitionActive.current &&
+												recognitionRef.current
+											) {
+												recognitionRef.current.start();
+											}
+										}, 100);
+									} catch (error) {
+										console.log(
+											'Mobile restart error (normal):',
+											error
+										);
+									}
+								}
+							},
+							isMobile ? 300 : 100
+						); // Longer debounce for mobile
+					}
 				}
 			};
 
@@ -208,11 +285,56 @@ export default function VoiceInput({
 			};
 
 			recognition.onend = () => {
-				console.log('⏹️ Speech recognition ended');
-				forceStopInternal();
+				console.log('⏹️ Speech recognition ended, isMobile:', isMobile);
 
-				if (permissionGranted) {
-					setVoiceStatus('🎤 Voice input ready - Click mic to start');
+				// For mobile, if we're still supposed to be recording, restart
+				if (isMobile && isRecognitionActive.current && !disabled) {
+					console.log('📱 Mobile: Restarting recognition...');
+
+					// Clear mobile timeout if exists
+					if (mobileTimeoutRef.current) {
+						clearTimeout(mobileTimeoutRef.current);
+					}
+
+					// Restart after short delay for mobile
+					mobileTimeoutRef.current = setTimeout(
+						() => {
+							if (
+								isRecognitionActive.current &&
+								recognitionRef.current &&
+								!disabled
+							) {
+								try {
+									recognitionRef.current.start();
+									setVoiceStatus(
+										'🔴 LISTENING - Continue speaking...'
+									);
+								} catch (error: any) {
+									console.log(
+										'Mobile restart ended (normal):',
+										error
+									);
+									if (error.name !== 'InvalidStateError') {
+										forceStopInternal();
+										if (permissionGranted) {
+											setVoiceStatus(
+												'🎤 Voice input ready - Click mic to start'
+											);
+										}
+									}
+								}
+							}
+						},
+						isMobile ? 500 : 100
+					);
+				} else {
+					// Desktop or intentional stop
+					forceStopInternal();
+					if (permissionGranted) {
+						setVoiceStatus(
+							'🎤 Voice input ready - Click mic to start'
+						);
+					}
 				}
 			};
 
@@ -279,8 +401,9 @@ export default function VoiceInput({
 
 			setVoiceStatus('🚀 Starting speech recognition...');
 
-			// Clear any previous states
+			// Clear any previous states and refs
 			setInterimText('');
+			lastTranscriptRef.current = '';
 
 			setTimeout(() => {
 				try {
@@ -288,8 +411,21 @@ export default function VoiceInput({
 						recognitionRef.current &&
 						!isRecognitionActive.current
 					) {
-						console.log('Actually starting recognition...');
+						console.log(
+							'Actually starting recognition... Mobile:',
+							isMobile
+						);
 						recognitionRef.current.start();
+
+						// For mobile, set a longer timeout to allow for longer phrases
+						if (isMobile) {
+							console.log(
+								'📱 Mobile mode: Extended listening timeout'
+							);
+							setVoiceStatus(
+								'🔴 LISTENING - Speak your full question...'
+							);
+						}
 					} else {
 						console.log(
 							'Cannot start - recognition not ready or already active'
@@ -337,11 +473,20 @@ export default function VoiceInput({
 		setIsRecording(false);
 		setIsInitializing(false);
 		setInterimText('');
+		lastTranscriptRef.current = '';
 
-		// Clear any pending timeouts
+		// Clear all timeouts
 		if (stopTimeoutRef.current) {
 			clearTimeout(stopTimeoutRef.current);
 			stopTimeoutRef.current = null;
+		}
+		if (transcriptTimeoutRef.current) {
+			clearTimeout(transcriptTimeoutRef.current);
+			transcriptTimeoutRef.current = null;
+		}
+		if (mobileTimeoutRef.current) {
+			clearTimeout(mobileTimeoutRef.current);
+			mobileTimeoutRef.current = null;
 		}
 	};
 
@@ -525,12 +670,25 @@ export default function VoiceInput({
 
 	// Force stop function for emergency cases
 	const forceStop = () => {
-		console.log('FORCE STOP called for browser:', browserType);
+		console.log(
+			'FORCE STOP called for browser:',
+			browserType,
+			'Mobile:',
+			isMobile
+		);
 
-		// Clear any pending timeouts
+		// Clear all timeouts
 		if (stopTimeoutRef.current) {
 			clearTimeout(stopTimeoutRef.current);
 			stopTimeoutRef.current = null;
+		}
+		if (transcriptTimeoutRef.current) {
+			clearTimeout(transcriptTimeoutRef.current);
+			transcriptTimeoutRef.current = null;
+		}
+		if (mobileTimeoutRef.current) {
+			clearTimeout(mobileTimeoutRef.current);
+			mobileTimeoutRef.current = null;
 		}
 
 		// Immediately stop all states
@@ -546,10 +704,10 @@ export default function VoiceInput({
 					recognitionRef.current.stop();
 				}
 
-				// For Edge: recreate the recognition object
-				if (browserType === 'edge') {
+				// For Edge or mobile: recreate the recognition object
+				if (browserType === 'edge' || isMobile) {
 					console.log(
-						'Edge detected: Recreating recognition object...'
+						'Edge/Mobile detected: Recreating recognition object...'
 					);
 					recognitionRef.current = null;
 					setTimeout(() => {
@@ -570,8 +728,15 @@ export default function VoiceInput({
 	// Cleanup function to stop recording when component unmounts
 	useEffect(() => {
 		return () => {
+			// Clear all timeouts
 			if (stopTimeoutRef.current) {
 				clearTimeout(stopTimeoutRef.current);
+			}
+			if (transcriptTimeoutRef.current) {
+				clearTimeout(transcriptTimeoutRef.current);
+			}
+			if (mobileTimeoutRef.current) {
+				clearTimeout(mobileTimeoutRef.current);
 			}
 			if (isRecording) {
 				forceStop();
@@ -599,6 +764,11 @@ export default function VoiceInput({
 						<div className="flex items-center gap-2 text-blue-800 dark:text-blue-200">
 							<Mic className="w-4 h-4" />
 							<span>{voiceStatus}</span>
+							{isMobile && (
+								<span className="px-2 py-1 bg-green-500 text-white text-xs rounded font-medium">
+									📱 MOBILE
+								</span>
+							)}
 							{browserType === 'edge' && (
 								<span className="px-2 py-1 bg-orange-500 text-white text-xs rounded font-medium">
 									EDGE
@@ -616,6 +786,15 @@ export default function VoiceInput({
 							)}
 						</div>
 					</div>
+
+					{isMobile && isRecording && (
+						<div className="mt-2 p-2 bg-green-50 dark:bg-green-900/20 rounded text-xs">
+							<span className="text-green-700 dark:text-green-300">
+								📱 Mobile tip: Speak your complete question
+								clearly. The system will wait for you to finish.
+							</span>
+						</div>
+					)}
 
 					{interimText && (
 						<div className="mt-2 p-2 bg-gray-100 dark:bg-gray-700 rounded text-xs">
@@ -637,11 +816,11 @@ export default function VoiceInput({
 							>
 								Force Stop
 							</button>
-							{browserType === 'edge' && (
+							{(browserType === 'edge' || isMobile) && (
 								<button
 									onClick={() => {
 										forceStop();
-										// Reinitialize for Edge
+										// Reinitialize for Edge/Mobile
 										setTimeout(
 											() => initializeSpeechRecognition(),
 											200
@@ -649,7 +828,7 @@ export default function VoiceInput({
 									}}
 									className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
 								>
-									Reset Edge
+									{isMobile ? 'Reset Mobile' : 'Reset Edge'}
 								</button>
 							)}
 						</div>

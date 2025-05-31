@@ -90,7 +90,6 @@ export default function ChatPage() {
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-	// Initialize voice input
 	const voiceInput = VoiceInput({
 		onTranscript: (text: string) => {
 			setInputMessage((prev) => prev + (prev ? ' ' : '') + text);
@@ -123,7 +122,6 @@ export default function ChatPage() {
 		setUploadedImages([]);
 		setInputMessage('');
 		setIsSidebarOpen(false);
-		// Force stop voice recording if active
 		if (voiceInput.isRecording) {
 			voiceInput.forceStop();
 		}
@@ -151,7 +149,6 @@ export default function ChatPage() {
 		setCurrentChatId(chatId);
 		setIsSidebarOpen(false);
 
-		// Force stop voice recording when switching chats
 		if (voiceInput.isRecording) {
 			voiceInput.forceStop();
 		}
@@ -232,7 +229,6 @@ export default function ChatPage() {
 		if (!inputMessage.trim() && uploadedImages.length === 0) return;
 		if (!user) return;
 
-		// Force stop voice recording when submitting
 		if (voiceInput.isRecording) {
 			voiceInput.forceStop();
 		}
@@ -382,7 +378,6 @@ export default function ChatPage() {
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			// Force stop voice recording before submitting via Enter key
 			if (voiceInput.isRecording) {
 				voiceInput.forceStop();
 			}
@@ -735,7 +730,6 @@ export default function ChatPage() {
 							</div>
 						)}
 
-						{/* Show status based on uploaded images */}
 						{uploadedImages.length === 0 && (
 							<div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
 								<p className="text-sm text-yellow-800 dark:text-yellow-200 flex items-center gap-2">
@@ -746,7 +740,6 @@ export default function ChatPage() {
 							</div>
 						)}
 
-						{/* Voice status component - only show when images are uploaded */}
 						{uploadedImages.length > 0 && (
 							<div className="mb-4">
 								<voiceInput.VoiceStatus />
@@ -774,7 +767,6 @@ export default function ChatPage() {
 								<Paperclip className="w-5 h-5" />
 							</button>
 
-							{/* Voice input button */}
 							<voiceInput.VoiceButton />
 
 							<div className="flex-1">
@@ -825,12 +817,12 @@ export default function ChatPage() {
 							</button>
 						</form>
 
-						{/* Browser compatibility notice */}
 						<div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
 							{voiceInput.speechSupported ? (
 								<span>
-									🎤 Voice input ready • Works in Chrome,
-									Edge, Safari • Firefox not supported
+									🎤 Voice input ready • Chrome, Edge, Safari
+									supported • 📱 Mobile optimized • Firefox
+									not supported
 								</span>
 							) : (
 								<span>
