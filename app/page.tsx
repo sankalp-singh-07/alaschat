@@ -49,7 +49,7 @@ export default function Home() {
 						<SignedIn>
 							<button
 								onClick={() => (window.location.href = '/chat')}
-								className="inline-flex items-center justify-center px-12 py-4 text-lg font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-full transition-all duration-200 shadow-lg hover:shadow-xl"
+								className="inline-flex items-center justify-center px-12 py-4 text-lg font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-full transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer"
 							>
 								<MessageSquare className="w-5 h-5 mr-2" />
 								Start Chatting
@@ -62,7 +62,7 @@ export default function Home() {
 								fallbackRedirectUrl={'/chat'}
 								forceRedirectUrl={'/chat'}
 							>
-								<button className="inline-flex items-center justify-center px-12 py-4 text-lg font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-full transition-all duration-200 shadow-lg hover:shadow-xl">
+								<button className="inline-flex items-center justify-center px-12 py-4 text-lg font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-full transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer">
 									<Upload className="w-5 h-5 mr-2" />
 									Get Started
 								</button>

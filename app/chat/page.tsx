@@ -12,6 +12,7 @@ import {
 	Plus,
 	Trash2,
 	Menu,
+	Mic,
 } from 'lucide-react';
 import {
 	saveChatSession,
@@ -22,6 +23,7 @@ import {
 	deleteChatSession as deleteFirebaseChatSession,
 } from '../../lib/firebaseUtils';
 import VoiceInput from '../../components/voiceInput';
+import { ToastContainer } from 'react-toastify';
 
 interface Message {
 	id: string;
@@ -422,13 +424,23 @@ export default function ChatPage() {
 							<h2 className="text-xl font-bold text-gray-900 dark:text-white">
 								ALASCHAT
 							</h2>
-							<button
-								onClick={createNewChat}
-								className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors cursor-pointer"
-							>
-								<Plus className="h-4 w-4" />
-								New Chat
-							</button>
+							<div className="flex gap-2">
+								<button
+									onClick={createNewChat}
+									className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors cursor-pointer"
+								>
+									<Plus className="h-4 w-4" />
+									<span className="hidden lg:block">
+										New Chat
+									</span>
+								</button>
+								<button
+									onClick={() => setIsSidebarOpen(false)}
+									className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white dark:text-gray-200 bg-red-500 dark:bg-gray-700 rounded-lg hover:bg-red-800 dark:hover:bg-red-800 transition-colors cursor-pointer lg:hidden"
+								>
+									<X className="h-4 w-4" />
+								</button>
+							</div>
 						</div>
 
 						<div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
@@ -450,7 +462,7 @@ export default function ChatPage() {
 								</p>
 							</div>
 
-							<UserButton afterSignOutUrl="/" />
+							<UserButton />
 						</div>
 					</div>
 
@@ -729,7 +741,7 @@ export default function ChatPage() {
 								</div>
 							</div>
 						)}
-
+						{/* 
 						{uploadedImages.length === 0 && (
 							<div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
 								<p className="text-sm text-yellow-800 dark:text-yellow-200 flex items-center gap-2">
@@ -738,7 +750,7 @@ export default function ChatPage() {
 									voice input
 								</p>
 							</div>
-						)}
+						)} */}
 
 						{uploadedImages.length > 0 && (
 							<div className="mb-4">
@@ -817,7 +829,7 @@ export default function ChatPage() {
 							</button>
 						</form>
 
-						<div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
+						{/* <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
 							{voiceInput.speechSupported ? (
 								<span>
 									🎤 Voice input ready • Chrome, Edge, Safari
@@ -830,10 +842,11 @@ export default function ChatPage() {
 									Safari • Firefox doesn't support voice input
 								</span>
 							)}
-						</div>
+						</div> */}
 					</div>
 				</div>
 			</div>
+			<ToastContainer />
 		</div>
 	);
 }
