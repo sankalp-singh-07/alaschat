@@ -23,7 +23,7 @@ import {
 	deleteChatSession as deleteFirebaseChatSession,
 } from '../../lib/firebaseUtils';
 import VoiceInput from '../../components/voiceInput';
-import { ToastContainer } from 'react-toastify';
+import { toast, ToastContainer } from 'react-toastify';
 
 interface Message {
 	id: string;

@@ -1,17 +1,12 @@
-import { useAuth } from '@clerk/clerk-react';
 import { createClient } from '@supabase/supabase-js';
 
-const { getToken } = useAuth();
+export async function getSupabaseClient() {
+	const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+	const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-const token = await getToken({ template: 'supabase' });
+	if (!supabaseUrl || !supabaseAnonKey) return;
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+	const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const supabase = createClient(supabaseUrl!, supabaseAnonKey!, {
-	global: {
-		headers: {
-			Authorization: `Bearer ${token}`,
-		},
-	},
-});
+	return supabase;
+}
