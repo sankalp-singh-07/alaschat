@@ -3,19 +3,85 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-function base64ToGenerativePart(base64Data: string, mimeType: string) {
-	return {
-		inlineData: {
-			data: base64Data.split(',')[1],
-			mimeType,
-		},
-	};
+async function urlToGenerativePart(imageUrl: string) {
+	try {
+		const response = await fetch(imageUrl);
+
+		if (!response.ok) {
+			throw new Error(`Failed to fetch image: ${response.statusText}`);
+		}
+
+		console.log(response);
+
+		const contentType =
+			response.headers.get('Content-Type') || 'image/jpeg';
+		const arrayBuffer = await response.arrayBuffer();
+		const base64Data = Buffer.from(arrayBuffer).toString('base64');
+
+		return {
+			inlineData: {
+				data: base64Data,
+				mimeType: contentType,
+			},
+		};
+	} catch (error) {
+		console.error('Error processing image URL:', imageUrl, error);
+		throw new Error(`Failed to process image: ${error}`);
+	}
 }
+
+const buildPrompt = (userMessage: string): string => {
+	const lowerMsg = userMessage.toLowerCase();
+
+	let specializationInstructions = '';
+	let additionalFocus = '';
+
+	if (
+		lowerMsg.includes('diagnose') ||
+		lowerMsg.includes('problem') ||
+		lowerMsg.includes('issue')
+	) {
+		specializationInstructions =
+			'Focus on detecting visual symptoms, flaws, defects, or anomalies in the image.';
+		additionalFocus =
+			'Look for any warning signs or patterns that indicate a problem or malfunction.';
+	} else if (lowerMsg.includes('improve') || lowerMsg.includes('enhance')) {
+		specializationInstructions =
+			'Focus on analyzing quality, composition, and areas for improvement.';
+		additionalFocus =
+			'Give constructive suggestions for enhancing the visual or structural aspects.';
+	} else if (lowerMsg.includes('describe') || lowerMsg.includes('analyze')) {
+		specializationInstructions =
+			'Provide a thorough and objective analysis of the image.';
+		additionalFocus =
+			'Describe what you see in clear, human-friendly terms.';
+	} else {
+		specializationInstructions =
+			'Try to understand the context based on the image(s) and message.';
+		additionalFocus = 'Respond in a relevant, helpful, and insightful way.';
+	}
+
+	return `
+		You are an expert visual and contextual AI assistant.
+		Your task is to:
+		1. Carefully examine the attached image(s).
+		2. Fully understand the user's message and intent.
+		3. Connect the visual details from the image(s) with what the user is asking or describing.
+		4. ${specializationInstructions}
+		5. ${additionalFocus}
+
+		Here is the user's message:
+		"${userMessage}"
+
+		Now begin your analysis and respond in a helpful and clear manner.
+	`.trim();
+};
 
 export async function POST(request: NextRequest) {
 	try {
 		console.log('API Route called');
 		const { message, images } = await request.json();
+
 		console.log('Request data:', {
 			messageLength: message?.length,
 			imageCount: images?.length,
@@ -38,20 +104,21 @@ export async function POST(request: NextRequest) {
 		}
 
 		console.log('Initializing Gemini model...');
-		const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+		const model = genAI.getGenerativeModel({
+			model: 'gemini-1.5-flash-latest',
+		});
 
-		const prompt =
+		const prompt = buildPrompt(
 			message ||
-			'Please analyze these images in detail. Describe what you see, identify key elements, patterns, data, text, or any notable features. Provide insights and observations that would be helpful for understanding the content.';
+				'Please analyze these images in detail. Describe what you see, identify key elements, patterns, data, text, or any notable features. Provide insights and observations that would be helpful for understanding the content.'
+		);
 
 		console.log('Converting images to Gemini format...');
-		const imageParts = images.map((imageData: string) => {
-			const mimeType = imageData.substring(
-				imageData.indexOf(':') + 1,
-				imageData.indexOf(';')
-			);
-			return base64ToGenerativePart(imageData, mimeType);
-		});
+		const imageParts = await Promise.all(
+			images.map(async (imageUrl: string) => {
+				return await urlToGenerativePart(imageUrl);
+			})
+		);
 
 		console.log('Calling Gemini API...');
 		const result = await model.generateContent([prompt, ...imageParts]);

@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useUser, UserButton } from '@clerk/nextjs';
 import { redirect } from 'next/navigation';
+import { v4 as uuidv4 } from 'uuid';
+
 import {
 	Send,
 	X,
@@ -12,34 +14,20 @@ import {
 	Plus,
 	Trash2,
 	Menu,
-	Mic,
 } from 'lucide-react';
 import {
-	saveChatSession,
-	loadChatSessions,
-	saveMessage,
-	loadMessages,
-	updateChatSession,
-	deleteChatSession as deleteFirebaseChatSession,
-} from '../../lib/firebaseUtils';
-import VoiceInput from '../../components/voiceInput';
+	createMessage,
+	createSession,
+	deleteSession,
+	getMessages,
+	getSessions,
+	updateSession,
+	testConnection,
+	type Message,
+	type ChatSession,
+} from '@/lib/supabaseUtils';
 import { toast, ToastContainer } from 'react-toastify';
-
-interface Message {
-	id: string;
-	type: 'user' | 'assistant';
-	content: string;
-	images?: string[];
-	timestamp: Date;
-}
-
-interface ChatSession {
-	id: string;
-	title: string;
-	lastMessage: string;
-	timestamp: Date;
-	messageCount: number;
-}
+import 'react-toastify/dist/ReactToastify.css';
 
 interface UploadedImage {
 	id: string;
@@ -58,18 +46,29 @@ export default function ChatPage() {
 	}, [isLoaded, user]);
 
 	useEffect(() => {
+		const testDB = async () => {
+			if (isLoaded && user) {
+				const connected = await testConnection();
+				if (!connected) {
+					toast.error(
+						'Database connection failed. Please check your setup.'
+					);
+				}
+			}
+		};
+		testDB();
+	}, [isLoaded, user]);
+
+	useEffect(() => {
 		const loadUserData = async () => {
 			if (isLoaded && user) {
 				setIsLoadingData(true);
 				try {
-					const sessions = await loadChatSessions(user.id);
-					const convertedSessions = sessions.map((session) => ({
-						...session,
-						timestamp: session.timestamp.toDate(),
-					}));
-					setChatSessions(convertedSessions);
+					const sessions = await getSessions(user.id);
+					setChatSessions(sessions);
 				} catch (error) {
 					console.error('Error loading user data', error);
+					toast.error('Failed to load chat sessions');
 				} finally {
 					setIsLoadingData(false);
 				}
@@ -83,6 +82,7 @@ export default function ChatPage() {
 	const [inputMessage, setInputMessage] = useState('');
 	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
+	const [isUploadingImages, setIsUploadingImages] = useState(false);
 	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 	const [isLoadingData, setIsLoadingData] = useState(true);
 
@@ -91,14 +91,6 @@ export default function ChatPage() {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-	const voiceInput = VoiceInput({
-		onTranscript: (text: string) => {
-			setInputMessage((prev) => prev + (prev ? ' ' : '') + text);
-		},
-		disabled: uploadedImages.length === 0 || isLoading,
-		size: 'md',
-	});
 
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -124,24 +116,23 @@ export default function ChatPage() {
 		setUploadedImages([]);
 		setInputMessage('');
 		setIsSidebarOpen(false);
-		if (voiceInput.isRecording) {
-			voiceInput.forceStop();
-		}
 	};
 
 	const deleteChat = async (chatId: string) => {
 		if (!user) return;
 
 		try {
-			await deleteFirebaseChatSession(chatId, user.id);
+			await deleteSession(chatId, user.id);
 			setChatSessions((prev) =>
 				prev.filter((chat) => chat.id !== chatId)
 			);
 			if (currentChatId === chatId) {
 				createNewChat();
 			}
+			toast.success('Chat deleted successfully');
 		} catch (error) {
 			console.error('Error deleting chat:', error);
+			toast.error('Failed to delete chat');
 		}
 	};
 
@@ -151,24 +142,18 @@ export default function ChatPage() {
 		setCurrentChatId(chatId);
 		setIsSidebarOpen(false);
 
-		if (voiceInput.isRecording) {
-			voiceInput.forceStop();
-		}
-
 		try {
-			const chatMessages = await loadMessages(chatId, user.id);
-			const convertedMessages = chatMessages.map((msg) => ({
-				...msg,
-				timestamp: msg.timestamp.toDate(),
-			}));
-			setMessages(convertedMessages);
+			const chatMessages = await getMessages(chatId);
+			setMessages(chatMessages);
 		} catch (error) {
 			console.error('Error loading chat messages:', error);
 			setMessages([]);
+			toast.error('Failed to load chat messages');
 		}
 	};
 
-	const formatTime = (date: Date) => {
+	const formatTime = (dateString: string) => {
+		const date = new Date(dateString);
 		const now = new Date();
 		const diff = now.getTime() - date.getTime();
 		const minutes = Math.floor(diff / (1000 * 60));
@@ -180,21 +165,12 @@ export default function ChatPage() {
 		return `${days}d ago`;
 	};
 
-	const fileToBase64 = (file: File): Promise<string> => {
-		return new Promise((resolve, reject) => {
-			const reader = new FileReader();
-			reader.readAsDataURL(file);
-			reader.onload = () => resolve(reader.result as string);
-			reader.onerror = (error) => reject(error);
-		});
-	};
-
 	const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
 		const files = Array.from(event.target.files || []);
 
 		files.forEach((file) => {
 			if (!file.type.startsWith('image/')) {
-				alert('Please upload only image files');
+				toast.error('Please upload only image files');
 				return;
 			}
 
@@ -225,54 +201,89 @@ export default function ChatPage() {
 		});
 	};
 
+	const uploadImagesToCloudinary = async (
+		images: UploadedImage[]
+	): Promise<string[]> => {
+		setIsUploadingImages(true);
+		try {
+			const formData = new FormData();
+			images.forEach((image) => {
+				formData.append('images', image.file);
+			});
+
+			console.log('these are formdata: ', formData);
+
+			const response = await fetch('/api/upload-images', {
+				method: 'POST',
+				body: formData,
+			});
+
+			if (!response.ok) {
+				throw new Error('Failed to upload images');
+			}
+
+			const { imageUrls } = await response.json();
+			return imageUrls;
+		} catch (error) {
+			console.error('Error uploading images:', error);
+			throw error;
+		} finally {
+			setIsUploadingImages(false);
+		}
+	};
+
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 
 		if (!inputMessage.trim() && uploadedImages.length === 0) return;
 		if (!user) return;
 
-		if (voiceInput.isRecording) {
-			voiceInput.forceStop();
-		}
-
 		setIsLoading(true);
 
-		const imageDataUrls = await Promise.all(
-			uploadedImages.map((img) => fileToBase64(img.file))
-		);
-
-		const userMessage: Message = {
-			id: Date.now().toString(),
-			type: 'user',
-			content: inputMessage || 'Analyze these images',
-			images: uploadedImages.map((img) => img.preview),
-			timestamp: new Date(),
-		};
-
-		setMessages((prev) => [...prev, userMessage]);
-
-		const imagesToProcess = [...uploadedImages];
+		const newChatId = currentChatId || uuidv4();
 		const currentMessage = inputMessage;
-		setInputMessage('');
-		setUploadedImages([]);
+		const imagesToProcess = [...uploadedImages];
+		const isNewChat = !currentChatId;
 
 		try {
-			let activeChatId = currentChatId;
+			let imageUrls: string[] = [];
 
-			if (!activeChatId) {
-				activeChatId = Date.now().toString();
-				setCurrentChatId(activeChatId);
+			if (imagesToProcess.length > 0) {
+				imageUrls = await uploadImagesToCloudinary(imagesToProcess);
 			}
 
-			await saveMessage({
-				id: userMessage.id,
-				type: userMessage.type,
-				content: userMessage.content,
-				images: imageDataUrls,
-				timestamp: userMessage.timestamp,
-				chatId: activeChatId,
-				userId: user.id,
-			});
+			if (isNewChat) {
+				const newSession: ChatSession = {
+					id: newChatId,
+					title:
+						currentMessage.slice(0, 50) +
+							(currentMessage.length > 50 ? '...' : '') ||
+						'Image Analysis',
+					last_message: currentMessage || 'Image Analysis',
+					message_count: 0,
+					last_img: imageUrls,
+					user_id: user.id,
+				};
+
+				await createSession(newSession);
+				setChatSessions((prev) => [newSession, ...prev]);
+				setCurrentChatId(newChatId);
+			}
+
+			setInputMessage('');
+			setUploadedImages([]);
+
+			const userMessage: Message = {
+				type: 'user',
+				content: currentMessage || 'Analyze these images',
+				image_url: imageUrls,
+				chat_id: newChatId,
+				user_id: user.id,
+			};
+
+			setMessages((prev) => [...prev, userMessage]);
+
+			await createMessage(userMessage);
 
 			const response = await fetch('/api/analyze-images', {
 				method: 'POST',
@@ -281,7 +292,7 @@ export default function ChatPage() {
 				},
 				body: JSON.stringify({
 					message: currentMessage,
-					images: imageDataUrls,
+					images: imageUrls,
 				}),
 			});
 
@@ -293,57 +304,29 @@ export default function ChatPage() {
 			const { analysis } = await response.json();
 
 			const aiMessage: Message = {
-				id: (Date.now() + 1).toString(),
 				type: 'assistant',
 				content: analysis,
-				timestamp: new Date(),
+				chat_id: newChatId,
+				user_id: user.id,
 			};
 
 			setMessages((prev) => [...prev, aiMessage]);
 
-			await saveMessage({
-				id: aiMessage.id,
-				type: aiMessage.type,
-				content: aiMessage.content,
-				timestamp: aiMessage.timestamp,
-				chatId: activeChatId,
-				userId: user.id,
+			await createMessage(aiMessage);
+
+			const updatedSession = await updateSession(newChatId, {
+				last_message:
+					analysis.slice(0, 100) +
+					(analysis.length > 100 ? '...' : ''),
+				message_count: messages.length + (isNewChat ? 2 : 2),
+				last_img: imageUrls,
 			});
 
-			if (!currentChatId) {
-				const newSession: ChatSession = {
-					id: activeChatId,
-					title:
-						currentMessage.slice(0, 50) +
-							(currentMessage.length > 50 ? '...' : '') ||
-						'Image Analysis',
-					lastMessage:
-						analysis.slice(0, 100) +
-						(analysis.length > 100 ? '...' : ''),
-					timestamp: new Date(),
-					messageCount: 2,
-				};
-
-				await saveChatSession(newSession, user.id);
-				setChatSessions((prev) => [newSession, ...prev]);
-			} else {
-				const updatedSession = {
-					lastMessage:
-						analysis.slice(0, 100) +
-						(analysis.length > 100 ? '...' : ''),
-					timestamp: new Date(),
-					messageCount: messages.length + 2,
-				};
-
-				await updateChatSession(activeChatId, updatedSession, user.id);
-				setChatSessions((prev) =>
-					prev.map((chat) =>
-						chat.id === activeChatId
-							? { ...chat, ...updatedSession }
-							: chat
-					)
-				);
-			}
+			setChatSessions((prev) =>
+				prev.map((chat) =>
+					chat.id === newChatId ? updatedSession : chat
+				)
+			);
 		} catch (error: any) {
 			console.error('Error processing message:', error);
 
@@ -356,19 +339,22 @@ export default function ChatPage() {
 			} else if (error.message.includes('quota')) {
 				errorMessage =
 					'AI service quota exceeded. Please try again later.';
-			} else if (error.message.includes('Invalid')) {
+			} else if (error.message.includes('upload')) {
+				errorMessage = 'Failed to upload images. Please try again.';
+			} else if (error.message.includes('foreign key constraint')) {
 				errorMessage =
-					'Invalid request. Please check your images and try again.';
+					'There was a database issue. Please try creating a new chat.';
 			}
 
 			const errorResponse: Message = {
-				id: (Date.now() + 1).toString(),
 				type: 'assistant',
 				content: errorMessage,
-				timestamp: new Date(),
+				chat_id: newChatId,
+				user_id: user.id,
 			};
 
 			setMessages((prev) => [...prev, errorResponse]);
+			toast.error(errorMessage);
 		} finally {
 			imagesToProcess.forEach((img) => {
 				URL.revokeObjectURL(img.preview);
@@ -380,9 +366,6 @@ export default function ChatPage() {
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			if (voiceInput.isRecording) {
-				voiceInput.forceStop();
-			}
 			handleSubmit(e);
 		}
 	};
@@ -491,14 +474,15 @@ export default function ChatPage() {
 											{chat.title}
 										</h3>
 										<p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-1">
-											{chat.lastMessage}
+											{chat.last_message}
 										</p>
 										<div className="flex items-center justify-between mt-2">
 											<span className="text-xs text-gray-400 dark:text-gray-500">
-												{formatTime(chat.timestamp)}
+												{chat.created_at &&
+													formatTime(chat.created_at)}
 											</span>
 											<span className="text-xs text-gray-400 dark:text-gray-500">
-												{chat.messageCount} messages
+												{chat.message_count} messages
 											</span>
 										</div>
 									</div>
@@ -556,8 +540,7 @@ export default function ChatPage() {
 											: 'New Conversation'}
 									</h1>
 									<p className="text-sm text-gray-500 dark:text-gray-400">
-										AI Image Analysis Assistant with Voice
-										Input
+										AI Image Analysis Assistant
 									</p>
 								</div>
 							</div>
@@ -576,9 +559,9 @@ export default function ChatPage() {
 									Welcome to ALASCHAT!
 								</h2>
 								<p className="text-gray-600 dark:text-gray-400 mb-8 text-lg">
-									Upload images and ask me anything about them
-									using text or voice input. I'll help you
-									analyze and understand your visual content.
+									Upload images and ask me anything about
+									them. I'll help you analyze and understand
+									your visual content.
 								</p>
 								<div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 max-w-md mx-auto">
 									<p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -599,9 +582,9 @@ export default function ChatPage() {
 							</div>
 						)}
 
-						{messages.map((message) => (
+						{messages.map((message, index) => (
 							<div
-								key={message.id}
+								key={index}
 								className={`flex gap-4 ${
 									message.type === 'user'
 										? 'justify-end'
@@ -629,16 +612,19 @@ export default function ChatPage() {
 											}
 										`}
 									>
-										{message.images &&
-											message.images.length > 0 && (
+										{message.image_url &&
+											message.image_url.length > 0 && (
 												<div className="mb-4 space-y-3">
-													{message.images.map(
-														(imageUrl, index) => (
+													{message.image_url.map(
+														(
+															imageUrl,
+															imgIndex
+														) => (
 															<img
-																key={index}
+																key={imgIndex}
 																src={imageUrl}
 																alt={`Uploaded image ${
-																	index + 1
+																	imgIndex + 1
 																}`}
 																className="max-w-full h-auto rounded-lg border border-gray-200 dark:border-gray-600"
 															/>
@@ -659,13 +645,13 @@ export default function ChatPage() {
 												: 'text-left'
 										}`}
 									>
-										{message.timestamp.toLocaleTimeString(
-											[],
-											{
+										{message.created_at &&
+											new Date(
+												message.created_at
+											).toLocaleTimeString([], {
 												hour: '2-digit',
 												minute: '2-digit',
-											}
-										)}
+											})}
 									</p>
 								</div>
 
@@ -702,7 +688,9 @@ export default function ChatPage() {
 											></div>
 										</div>
 										<span className="text-sm text-gray-500 dark:text-gray-400">
-											AI is analyzing...
+											{isUploadingImages
+												? 'Uploading images...'
+												: 'AI is analyzing...'}
 										</span>
 									</div>
 								</div>
@@ -741,22 +729,6 @@ export default function ChatPage() {
 								</div>
 							</div>
 						)}
-						{/* 
-						{uploadedImages.length === 0 && (
-							<div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-								<p className="text-sm text-yellow-800 dark:text-yellow-200 flex items-center gap-2">
-									<Paperclip className="w-4 h-4" />
-									Upload an image first to enable text and
-									voice input
-								</p>
-							</div>
-						)} */}
-
-						{uploadedImages.length > 0 && (
-							<div className="mb-4">
-								<voiceInput.VoiceStatus />
-							</div>
-						)}
 
 						<form
 							onSubmit={handleSubmit}
@@ -775,21 +747,15 @@ export default function ChatPage() {
 								onClick={() => fileInputRef.current?.click()}
 								className="flex-shrink-0 h-12 px-4 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl transition-colors cursor-pointer"
 								title="Upload images"
+								disabled={isLoading || isUploadingImages}
 							>
 								<Paperclip className="w-5 h-5" />
 							</button>
 
-							<voiceInput.VoiceButton />
-
 							<div className="flex-1">
 								<textarea
 									ref={textareaRef}
-									value={
-										inputMessage +
-										(voiceInput.interimText
-											? ' ' + voiceInput.interimText
-											: '')
-									}
+									value={inputMessage}
 									onChange={(e) =>
 										setInputMessage(e.target.value)
 									}
@@ -797,20 +763,18 @@ export default function ChatPage() {
 									placeholder={
 										uploadedImages.length === 0
 											? 'Upload an image first to start chatting...'
-											: voiceInput.isRecording
-											? '🎤 Listening... Speak now or continue typing'
-											: 'Type your message or click the mic to speak...'
+											: 'Type your message...'
 									}
 									rows={1}
 									className={`w-full h-12 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 ${
 										uploadedImages.length === 0
 											? 'bg-gray-100 dark:bg-gray-600 cursor-not-allowed'
-											: voiceInput.isRecording
-											? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-600'
 											: 'bg-white dark:bg-gray-700'
 									}`}
 									disabled={
-										isLoading || uploadedImages.length === 0
+										isLoading ||
+										isUploadingImages ||
+										uploadedImages.length === 0
 									}
 								/>
 							</div>
@@ -821,7 +785,8 @@ export default function ChatPage() {
 									uploadedImages.length === 0 ||
 									(!inputMessage.trim() &&
 										uploadedImages.length === 0) ||
-									isLoading
+									isLoading ||
+									isUploadingImages
 								}
 								className="flex-shrink-0 h-12 px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
 							>
@@ -829,20 +794,9 @@ export default function ChatPage() {
 							</button>
 						</form>
 
-						{/* <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
-							{voiceInput.speechSupported ? (
-								<span>
-									🎤 Voice input ready • Chrome, Edge, Safari
-									supported • 📱 Mobile optimized • Firefox
-									not supported
-								</span>
-							) : (
-								<span>
-									🚫 Voice features require Chrome, Edge, or
-									Safari • Firefox doesn't support voice input
-								</span>
-							)}
-						</div> */}
+						<div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
+							Upload images to start analyzing with AI
+						</div>
 					</div>
 				</div>
 			</div>
