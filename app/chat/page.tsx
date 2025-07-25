@@ -14,6 +14,7 @@ import {
 	Plus,
 	Trash2,
 	Menu,
+	Upload,
 } from 'lucide-react';
 import {
 	createMessage,
@@ -34,6 +35,11 @@ interface UploadedImage {
 	file: File;
 	preview: string;
 	name: string;
+}
+
+interface MessageStatus {
+	id: string;
+	status: 'sending' | 'sent' | 'analyzing' | 'completed' | 'error';
 }
 
 export default function ChatPage() {
@@ -59,6 +65,24 @@ export default function ChatPage() {
 		testDB();
 	}, [isLoaded, user]);
 
+	const [messages, setMessages] = useState<Message[]>([]);
+	const [inputMessage, setInputMessage] = useState('');
+	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
+	const [currentSessionImages, setCurrentSessionImages] = useState<string[]>(
+		[]
+	);
+	const [isLoading, setIsLoading] = useState(false);
+	const [isUploadingImages, setIsUploadingImages] = useState(false);
+	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+	const [isLoadingData, setIsLoadingData] = useState(true);
+	const [messageStatuses, setMessageStatuses] = useState<MessageStatus[]>([]);
+	const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+	const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const messagesEndRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+
 	useEffect(() => {
 		const loadUserData = async () => {
 			if (isLoaded && user) {
@@ -78,27 +102,9 @@ export default function ChatPage() {
 		loadUserData();
 	}, [isLoaded, user]);
 
-	const [messages, setMessages] = useState<Message[]>([]);
-	const [inputMessage, setInputMessage] = useState('');
-	const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
-	const [isLoading, setIsLoading] = useState(false);
-	const [isUploadingImages, setIsUploadingImages] = useState(false);
-	const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-	const [isLoadingData, setIsLoadingData] = useState(true);
-
-	const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-	const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-	const fileInputRef = useRef<HTMLInputElement>(null);
-	const messagesEndRef = useRef<HTMLDivElement>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-	const scrollToBottom = () => {
-		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-	};
-
 	useEffect(() => {
 		scrollToBottom();
-	}, [messages]);
+	}, [messages, messageStatuses]);
 
 	useEffect(() => {
 		if (textareaRef.current) {
@@ -110,12 +116,38 @@ export default function ChatPage() {
 		}
 	}, [inputMessage]);
 
+	const scrollToBottom = () => {
+		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+	};
+
+	const addMessageStatus = (id: string, status: MessageStatus['status']) => {
+		setMessageStatuses((prev) => [
+			...prev.filter((m) => m.id !== id),
+			{ id, status },
+		]);
+	};
+
+	const updateMessageStatus = (
+		id: string,
+		status: MessageStatus['status']
+	) => {
+		setMessageStatuses((prev) =>
+			prev.map((m) => (m.id === id ? { ...m, status } : m))
+		);
+	};
+
+	const removeMessageStatus = (id: string) => {
+		setMessageStatuses((prev) => prev.filter((m) => m.id !== id));
+	};
+
 	const createNewChat = () => {
 		setMessages([]);
 		setCurrentChatId(null);
 		setUploadedImages([]);
+		setCurrentSessionImages([]);
 		setInputMessage('');
 		setIsSidebarOpen(false);
+		setMessageStatuses([]);
 	};
 
 	const deleteChat = async (chatId: string) => {
@@ -145,6 +177,14 @@ export default function ChatPage() {
 		try {
 			const chatMessages = await getMessages(chatId);
 			setMessages(chatMessages);
+
+			const session = chatSessions.find((s) => s.id === chatId);
+			if (session && session.last_img) {
+				setCurrentSessionImages(session.last_img);
+			} else {
+				setCurrentSessionImages([]);
+			}
+			setUploadedImages([]); // Clear any newly uploaded images when loading an old chat
 		} catch (error) {
 			console.error('Error loading chat messages:', error);
 			setMessages([]);
@@ -211,8 +251,6 @@ export default function ChatPage() {
 				formData.append('images', image.file);
 			});
 
-			console.log('these are formdata: ', formData);
-
 			const response = await fetch('/api/upload-images', {
 				method: 'POST',
 				body: formData,
@@ -235,23 +273,54 @@ export default function ChatPage() {
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
 
-		if (!inputMessage.trim() && uploadedImages.length === 0) return;
+		if (
+			!inputMessage.trim() &&
+			uploadedImages.length === 0 &&
+			currentChatId === null
+		) {
+			toast.warning(
+				'Please type a message or upload an image to start the conversation.'
+			);
+			return;
+		}
 		if (!user) return;
 
+		let imagesToSend: string[] = [];
+		const isNewImagesUploaded = uploadedImages.length > 0;
+
+		if (isNewImagesUploaded) {
+			addMessageStatus('uploading', 'sending');
+			toast.info('Uploading images...', { autoClose: 2000 });
+			try {
+				imagesToSend = await uploadImagesToCloudinary(uploadedImages);
+				setCurrentSessionImages(imagesToSend);
+			} catch (error) {
+				toast.error('Failed to upload images. Please try again.');
+				removeMessageStatus('uploading');
+				setIsLoading(false);
+				return;
+			}
+			removeMessageStatus('uploading');
+		} else {
+			imagesToSend = currentSessionImages;
+		}
+
+		if (imagesToSend.length === 0 && !currentChatId) {
+			toast.warning(
+				'Please upload an image first to start the conversation.'
+			);
+			return;
+		}
+
+		const messageId = uuidv4();
+		addMessageStatus(messageId, 'sending');
 		setIsLoading(true);
 
 		const newChatId = currentChatId || uuidv4();
 		const currentMessage = inputMessage;
-		const imagesToProcess = [...uploadedImages];
 		const isNewChat = !currentChatId;
 
 		try {
-			let imageUrls: string[] = [];
-
-			if (imagesToProcess.length > 0) {
-				imageUrls = await uploadImagesToCloudinary(imagesToProcess);
-			}
-
 			if (isNewChat) {
 				const newSession: ChatSession = {
 					id: newChatId,
@@ -261,10 +330,9 @@ export default function ChatPage() {
 						'Image Analysis',
 					last_message: currentMessage || 'Image Analysis',
 					message_count: 0,
-					last_img: imageUrls,
+					last_img: imagesToSend,
 					user_id: user.id,
 				};
-
 				await createSession(newSession);
 				setChatSessions((prev) => [newSession, ...prev]);
 				setCurrentChatId(newChatId);
@@ -274,16 +342,22 @@ export default function ChatPage() {
 			setUploadedImages([]);
 
 			const userMessage: Message = {
+				id: messageId,
 				type: 'user',
-				content: currentMessage || 'Analyze these images',
-				image_url: imageUrls,
+				content: currentMessage,
+				image_url: imagesToSend,
 				chat_id: newChatId,
 				user_id: user.id,
 			};
 
 			setMessages((prev) => [...prev, userMessage]);
+			updateMessageStatus(messageId, 'sent');
+			toast.success('Message sent!', { autoClose: 1500 });
 
 			await createMessage(userMessage);
+
+			updateMessageStatus(messageId, 'analyzing');
+			toast.info('AI is analyzing your message...', { autoClose: 3000 });
 
 			const response = await fetch('/api/analyze-images', {
 				method: 'POST',
@@ -292,7 +366,7 @@ export default function ChatPage() {
 				},
 				body: JSON.stringify({
 					message: currentMessage,
-					images: imageUrls,
+					images: imagesToSend,
 				}),
 			});
 
@@ -311,6 +385,8 @@ export default function ChatPage() {
 			};
 
 			setMessages((prev) => [...prev, aiMessage]);
+			updateMessageStatus(messageId, 'completed');
+			toast.success('Analysis complete!', { autoClose: 1000 });
 
 			await createMessage(aiMessage);
 
@@ -318,8 +394,8 @@ export default function ChatPage() {
 				last_message:
 					analysis.slice(0, 100) +
 					(analysis.length > 100 ? '...' : ''),
-				message_count: messages.length + (isNewChat ? 2 : 2),
-				last_img: imageUrls,
+				message_count: messages.length + 2,
+				last_img: imagesToSend,
 			});
 
 			setChatSessions((prev) =>
@@ -327,8 +403,11 @@ export default function ChatPage() {
 					chat.id === newChatId ? updatedSession : chat
 				)
 			);
+
+			setTimeout(() => removeMessageStatus(messageId), 2000);
 		} catch (error: any) {
 			console.error('Error processing message:', error);
+			updateMessageStatus(messageId, 'error');
 
 			let errorMessage =
 				'Sorry, I encountered an error while analyzing your images. Please try again.';
@@ -341,9 +420,6 @@ export default function ChatPage() {
 					'AI service quota exceeded. Please try again later.';
 			} else if (error.message.includes('upload')) {
 				errorMessage = 'Failed to upload images. Please try again.';
-			} else if (error.message.includes('foreign key constraint')) {
-				errorMessage =
-					'There was a database issue. Please try creating a new chat.';
 			}
 
 			const errorResponse: Message = {
@@ -355,8 +431,10 @@ export default function ChatPage() {
 
 			setMessages((prev) => [...prev, errorResponse]);
 			toast.error(errorMessage);
+
+			setTimeout(() => removeMessageStatus(messageId), 3000);
 		} finally {
-			imagesToProcess.forEach((img) => {
+			uploadedImages.forEach((img) => {
 				URL.revokeObjectURL(img.preview);
 			});
 			setIsLoading(false);
@@ -370,13 +448,19 @@ export default function ChatPage() {
 		}
 	};
 
+	const currentStatus = messageStatuses[messageStatuses.length - 1];
+	const hasAnyImages =
+		uploadedImages.length > 0 || currentSessionImages.length > 0;
+
 	if (!isLoaded || isLoadingData) {
 		return (
 			<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
 				<div className="text-center">
 					<div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
 					<p className="text-gray-600 dark:text-gray-300">
-						{!isLoaded ? 'Loading...' : 'Loading your chats...'}
+						{!isLoaded
+							? 'Loading authentication...'
+							: 'Loading your chats...'}
 					</p>
 				</div>
 			</div>
@@ -384,7 +468,7 @@ export default function ChatPage() {
 	}
 
 	return (
-		<div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+		<div className="flex h-screen bg-gray-50 dark:bg-gray-900 font-inter">
 			{isSidebarOpen && (
 				<div
 					className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
@@ -394,12 +478,16 @@ export default function ChatPage() {
 
 			<div
 				className={`
-					fixed lg:relative inset-y-0 left-0 z-50
-					w-80 bg-white dark:bg-gray-800
-					border-r border-gray-200 dark:border-gray-700
-					transform transition-transform duration-300 ease-in-out
-					${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-				`}
+                    fixed lg:relative inset-y-0 left-0 z-50
+                    w-80 bg-white dark:bg-gray-800
+                    border-r border-gray-200 dark:border-gray-700
+                    transform transition-transform duration-300 ease-in-out
+                    ${
+						isSidebarOpen
+							? 'translate-x-0'
+							: '-translate-x-full lg:translate-x-0'
+					}
+                `}
 			>
 				<div className="flex flex-col h-full">
 					<div className="p-6 border-b border-gray-200 dark:border-gray-700">
@@ -411,6 +499,7 @@ export default function ChatPage() {
 								<button
 									onClick={createNewChat}
 									className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors cursor-pointer"
+									title="Start a new chat"
 								>
 									<Plus className="h-4 w-4" />
 									<span className="hidden lg:block">
@@ -420,6 +509,7 @@ export default function ChatPage() {
 								<button
 									onClick={() => setIsSidebarOpen(false)}
 									className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white dark:text-gray-200 bg-red-500 dark:bg-gray-700 rounded-lg hover:bg-red-800 dark:hover:bg-red-800 transition-colors cursor-pointer lg:hidden"
+									title="Close sidebar"
 								>
 									<X className="h-4 w-4" />
 								</button>
@@ -455,14 +545,14 @@ export default function ChatPage() {
 								<div
 									key={chat.id}
 									className={`
-										group flex items-start gap-3 p-4 rounded-lg cursor-pointer
-										transition-all duration-200 border
-										${
+                                        group flex items-start gap-3 p-4 rounded-lg cursor-pointer
+                                        transition-all duration-200 border
+                                        ${
 											currentChatId === chat.id
 												? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
 												: 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
 										}
-									`}
+                                    `}
 									onClick={() => loadChat(chat.id)}
 								>
 									<div className="flex-shrink-0 w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-lg flex items-center justify-center">
@@ -478,8 +568,8 @@ export default function ChatPage() {
 										</p>
 										<div className="flex items-center justify-between mt-2">
 											<span className="text-xs text-gray-400 dark:text-gray-500">
-												{chat.created_at &&
-													formatTime(chat.created_at)}
+												{chat.updated_at &&
+													formatTime(chat.updated_at)}
 											</span>
 											<span className="text-xs text-gray-400 dark:text-gray-500">
 												{chat.message_count} messages
@@ -493,6 +583,7 @@ export default function ChatPage() {
 											deleteChat(chat.id);
 										}}
 										className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 dark:hover:bg-red-900/20 rounded cursor-pointer"
+										title="Delete chat"
 									>
 										<Trash2 className="h-4 w-4 text-red-500" />
 									</button>
@@ -522,6 +613,7 @@ export default function ChatPage() {
 							<button
 								onClick={() => setIsSidebarOpen(true)}
 								className="lg:hidden p-2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors cursor-pointer"
+								title="Open sidebar"
 							>
 								<Menu className="h-5 w-5" />
 							</button>
@@ -541,6 +633,14 @@ export default function ChatPage() {
 									</h1>
 									<p className="text-sm text-gray-500 dark:text-gray-400">
 										AI Image Analysis Assistant
+										{currentSessionImages.length > 0 &&
+											` • ${
+												currentSessionImages.length
+											} image${
+												currentSessionImages.length > 1
+													? 's'
+													: ''
+											} loaded`}
 									</p>
 								</div>
 							</div>
@@ -581,10 +681,40 @@ export default function ChatPage() {
 								</div>
 							</div>
 						)}
-
+						{currentSessionImages.length > 0 &&
+							messages.length === 0 && (
+								<div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
+									<div className="flex items-center gap-2 mb-3">
+										<Bot className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+										<span className="text-sm font-medium text-blue-800 dark:text-blue-200">
+											Current Session Images (
+											{currentSessionImages.length})
+										</span>
+									</div>
+									<div className="flex flex-wrap gap-3">
+										{currentSessionImages.map(
+											(imageUrl, index) => (
+												<img
+													key={index}
+													src={imageUrl}
+													alt={`Session image ${
+														index + 1
+													}`}
+													className="w-16 h-16 object-cover rounded-lg border border-blue-300 dark:border-blue-600"
+												/>
+											)
+										)}
+									</div>
+									<p className="text-xs text-blue-600 dark:text-blue-300 mt-2">
+										You can continue asking questions about
+										these images or upload new ones to
+										replace them.
+									</p>
+								</div>
+							)}
 						{messages.map((message, index) => (
 							<div
-								key={index}
+								key={message.id || index}
 								className={`flex gap-4 ${
 									message.type === 'user'
 										? 'justify-end'
@@ -604,13 +734,13 @@ export default function ChatPage() {
 								>
 									<div
 										className={`
-											rounded-2xl px-6 py-4 border
-											${
+                                            rounded-2xl px-6 py-4 border
+                                            ${
 												message.type === 'user'
 													? 'bg-blue-600 text-white border-blue-600'
 													: 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white border-gray-200 dark:border-gray-700'
 											}
-										`}
+                                        `}
 									>
 										{message.image_url &&
 											message.image_url.length > 0 && (
@@ -664,8 +794,7 @@ export default function ChatPage() {
 								)}
 							</div>
 						))}
-
-						{isLoading && (
+						{currentStatus && (
 							<div className="flex justify-start gap-4">
 								<div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
 									<Bot className="h-6 w-6 text-blue-600 dark:text-blue-400" />
@@ -688,15 +817,21 @@ export default function ChatPage() {
 											></div>
 										</div>
 										<span className="text-sm text-gray-500 dark:text-gray-400">
-											{isUploadingImages
-												? 'Uploading images...'
-												: 'AI is analyzing...'}
+											{currentStatus.status ===
+												'sending' &&
+												'Sending message...'}
+											{currentStatus.status === 'sent' &&
+												'Message sent!'}
+											{currentStatus.status ===
+												'analyzing' &&
+												'AI is analyzing...'}
+											{currentStatus.status === 'error' &&
+												'Error occurred'}
 										</span>
 									</div>
 								</div>
 							</div>
 						)}
-
 						<div ref={messagesEndRef} />
 					</div>
 				</div>
@@ -714,13 +849,14 @@ export default function ChatPage() {
 											<img
 												src={image.preview}
 												alt={image.name}
-												className="w-20 h-20 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600"
+												className="w-20 h-20 object-cover rounded-lg "
 											/>
 											<button
 												onClick={() =>
 													removeImage(image.id)
 												}
 												className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors cursor-pointer"
+												title="Remove image"
 											>
 												<X className="w-3 h-3" />
 											</button>
@@ -745,8 +881,16 @@ export default function ChatPage() {
 							<button
 								type="button"
 								onClick={() => fileInputRef.current?.click()}
-								className="flex-shrink-0 h-12 px-4 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-xl transition-colors cursor-pointer"
-								title="Upload images"
+								className={`flex-shrink-0 h-12 px-4 border rounded-xl transition-colors cursor-pointer ${
+									hasAnyImages && uploadedImages.length === 0
+										? 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600'
+										: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-600'
+								}`}
+								title={
+									hasAnyImages && uploadedImages.length === 0
+										? 'Upload new images (optional)'
+										: 'Upload images (required)'
+								}
 								disabled={isLoading || isUploadingImages}
 							>
 								<Paperclip className="w-5 h-5" />
@@ -761,20 +905,24 @@ export default function ChatPage() {
 									}
 									onKeyDown={handleKeyDown}
 									placeholder={
-										uploadedImages.length === 0
-											? 'Upload an image first to start chatting...'
-											: 'Type your message...'
+										currentStatus?.status === 'analyzing'
+											? 'AI is analyzing...'
+											: hasAnyImages
+											? `Ask Anything now...`
+											: 'Upload an image first to start chatting...'
 									}
 									rows={1}
 									className={`w-full h-12 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400 ${
-										uploadedImages.length === 0
+										!hasAnyImages ||
+										currentStatus?.status === 'analyzing'
 											? 'bg-gray-100 dark:bg-gray-600 cursor-not-allowed'
 											: 'bg-white dark:bg-gray-700'
 									}`}
 									disabled={
 										isLoading ||
 										isUploadingImages ||
-										uploadedImages.length === 0
+										!hasAnyImages ||
+										currentStatus?.status === 'analyzing'
 									}
 								/>
 							</div>
@@ -782,25 +930,53 @@ export default function ChatPage() {
 							<button
 								type="submit"
 								disabled={
-									uploadedImages.length === 0 ||
-									(!inputMessage.trim() &&
-										uploadedImages.length === 0) ||
+									!hasAnyImages ||
+									!inputMessage.trim() ||
 									isLoading ||
-									isUploadingImages
+									isUploadingImages ||
+									currentStatus?.status === 'analyzing'
 								}
 								className="flex-shrink-0 h-12 px-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+								title="Send message"
 							>
-								<Send className="w-5 h-5" />
+								{currentStatus?.status === 'sending' ||
+								isUploadingImages ? (
+									<div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+								) : (
+									<Send className="w-5 h-5" />
+								)}
 							</button>
 						</form>
 
 						<div className="mt-3 text-xs text-gray-500 dark:text-gray-400 text-center">
-							Upload images to start analyzing with AI
+							{!hasAnyImages ? (
+								<span className="text-amber-600 dark:text-amber-400">
+									🖼️ Upload images to start analyzing with AI
+								</span>
+							) : currentSessionImages.length > 0 &&
+							  uploadedImages.length === 0 ? (
+								<span>
+									💬 Continue asking about your images or
+									upload new ones to replace them
+								</span>
+							) : (
+								<span>✨ AI-powered image analysis ready</span>
+							)}
 						</div>
 					</div>
 				</div>
 			</div>
-			<ToastContainer />
+			<ToastContainer
+				position="top-right"
+				autoClose={3000}
+				hideProgressBar={false}
+				newestOnTop={false}
+				closeOnClick
+				rtl={false}
+				pauseOnFocusLoss
+				draggable
+				pauseOnHover
+			/>
 		</div>
 	);
 }
