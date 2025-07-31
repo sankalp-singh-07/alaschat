@@ -55,7 +55,7 @@ export const getSessions = async (userId: string): Promise<ChatSession[]> => {
 			.from('chatsessions')
 			.select('*')
 			.eq('user_id', userId)
-			.order('created_at', { ascending: false });
+			.order('updated_at', { ascending: true });
 
 		if (error) {
 			console.error('Error getting sessions:', error);

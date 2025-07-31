@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useUser, UserButton } from '@clerk/nextjs';
 import { redirect } from 'next/navigation';
 import { v4 as uuidv4 } from 'uuid';
@@ -14,7 +14,6 @@ import {
 	Plus,
 	Trash2,
 	Menu,
-	Upload,
 } from 'lucide-react';
 import {
 	createMessage,
@@ -29,6 +28,7 @@ import {
 } from '@/lib/supabaseUtils';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { VoiceInput } from '@/components/voiceInput';
 
 interface UploadedImage {
 	id: string;
@@ -144,7 +144,7 @@ export default function ChatPage() {
 		setMessages([]);
 		setCurrentChatId(null);
 		setUploadedImages([]);
-		setCurrentSessionImages([]);
+		setCurrentSessionImages([]); //> New chat so no image selected yet
 		setInputMessage('');
 		setIsSidebarOpen(false);
 		setMessageStatuses([]);
@@ -184,7 +184,7 @@ export default function ChatPage() {
 			} else {
 				setCurrentSessionImages([]);
 			}
-			setUploadedImages([]); // Clear any newly uploaded images when loading an old chat
+			setUploadedImages([]); //> Clear any newly uploaded images when loading an old chat
 		} catch (error) {
 			console.error('Error loading chat messages:', error);
 			setMessages([]);
@@ -447,6 +447,10 @@ export default function ChatPage() {
 			handleSubmit(e);
 		}
 	};
+
+	const handleVoiceInput = useCallback((message: string) => {
+		setInputMessage(message);
+	}, []);
 
 	const currentStatus = messageStatuses[messageStatuses.length - 1];
 	const hasAnyImages =
@@ -896,6 +900,15 @@ export default function ChatPage() {
 								<Paperclip className="w-5 h-5" />
 							</button>
 
+							<VoiceInput
+								setInputMessage={handleVoiceInput}
+								disabled={
+									isLoading ||
+									isUploadingImages ||
+									currentStatus?.status === 'analyzing'
+								}
+								hasImages={hasAnyImages}
+							/>
 							<div className="flex-1">
 								<textarea
 									ref={textareaRef}
